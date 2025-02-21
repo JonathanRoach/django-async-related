@@ -902,17 +902,32 @@ class ForeignObject(RelatedField):
 
     def contribute_to_class(self, cls, name, private_only=False, **kwargs):
         super().contribute_to_class(cls, name, private_only=private_only, **kwargs)
-        setattr(cls, self.name, self.forward_related_accessor_class(self))
+        descriptor = self.forward_related_accessor_class(self)
+        setattr(cls, self.name, descriptor)
+        try:
+            setattr(cls, 'a__'+self.name, descriptor.asasyncdescriptor)
+        except AttributeError:
+            pass
 
     def contribute_to_related_class(self, cls, related):
         # Internal FK's - i.e., those with a related name ending with '+' -
         # and swapped models don't get a related descriptor.
         if not self.remote_field.hidden and not related.related_model._meta.swapped:
+            descriptor = self.related_accessor_class(related)
             setattr(
                 cls._meta.concrete_model,
                 related.accessor_name,
-                self.related_accessor_class(related),
+                descriptor,
             )
+            try:
+                setattr(
+                    cls._meta.concrete_model,
+                    'a__'+related.accessor_name,
+                    descriptor.asasyncdescriptor,
+                )
+            except AttributeError:
+                pass
+
             # While 'limit_choices_to' might be a callable, simply pass
             # it along for later - this is too early because it's still
             # model load time.

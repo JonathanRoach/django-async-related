@@ -63,7 +63,7 @@ and two directions (forward and reverse) for a total of six combinations.
    ``ReverseManyToManyDescriptor``, use ``ManyToManyDescriptor`` instead.
 """
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import sync_to_async, async_to_sync
 
 from django.core.exceptions import FieldError
 from django.db import (
@@ -201,24 +201,12 @@ class ForwardManyToOneDescriptor:
             False,
         )
 
-    def get_object(self, instance):
+    async def aget_object(self, instance):
         qs = self.get_queryset(instance=instance)
         # Assuming the database enforces foreign keys, this won't fail.
-        return qs.get(self.field.get_reverse_related_filter(instance))
+        return await qs.aget(self.field.get_reverse_related_filter(instance))
 
-    def __get__(self, instance, cls=None):
-        """
-        Get the related instance through the forward relation.
-
-        With the example above, when getting ``child.parent``:
-
-        - ``self`` is the descriptor managing the ``parent`` attribute
-        - ``instance`` is the ``child`` instance
-        - ``cls`` is the ``Child`` class (we don't need it)
-        """
-        if instance is None:
-            return self
-
+    async def aget_inner(self, instance):
         # The related instance is loaded from the database and then cached
         # by the field on the model instance state. It can also be pre-cached
         # by the reverse accessor (ReverseOneToOneDescriptor).
@@ -241,7 +229,7 @@ class ForwardManyToOneDescriptor:
             else:
                 rel_obj = None
             if rel_obj is None and has_value:
-                rel_obj = self.get_object(instance)
+                rel_obj = await self.aget_object(instance)
                 remote_field = self.field.remote_field
                 # If this is a one-to-one relation, set the reverse accessor
                 # cache on the related object to the current instance to avoid
@@ -256,6 +244,48 @@ class ForwardManyToOneDescriptor:
             )
         else:
             return rel_obj
+
+
+    class AsASyncDescriptor:
+        def __init__(self, parent):
+            self.parent = parent
+
+        def __get__(self, instance, cls=None):
+            """
+            Get the related instance through the forward relation.
+
+            With the example above, when getting ``child.parent``:
+
+            - ``self`` is the descriptor managing the ``parent`` attribute
+            - ``instance`` is the ``child`` instance
+            - ``cls`` is the ``Child`` class (we don't need it)
+            """
+            if instance is None:
+                return self
+
+            print('Forware ManyToOneDesriptor async get used')
+            return self.parent.aget_inner(instance)
+
+
+    @cached_property
+    def asasyncdescriptor(self):
+        return self.AsASyncDescriptor(self)
+
+
+    def __get__(self, instance, cls=None):
+        """
+        Get the related instance through the forward relation.
+
+        With the example above, when getting ``child.parent``:
+
+        - ``self`` is the descriptor managing the ``parent`` attribute
+        - ``instance`` is the ``child`` instance
+        - ``cls`` is the ``Child`` class (we don't need it)
+        """
+        if instance is None:
+            return self
+
+        return async_to_sync(self.aget_inner)(instance)
 
     def __set__(self, instance, value):
         """
@@ -466,21 +496,8 @@ class ReverseOneToOneDescriptor:
             False,
         )
 
-    def __get__(self, instance, cls=None):
-        """
-        Get the related instance through the reverse relation.
 
-        With the example above, when getting ``place.restaurant``:
-
-        - ``self`` is the descriptor managing the ``restaurant`` attribute
-        - ``instance`` is the ``place`` instance
-        - ``cls`` is the ``Place`` class (unused)
-
-        Keep in mind that ``Restaurant`` holds the foreign key to ``Place``.
-        """
-        if instance is None:
-            return self
-
+    async def aget_inner(self, instance):
         # The related instance is loaded from the database and then cached
         # by the field on the model instance state. It can also be pre-cached
         # by the forward accessor (ForwardManyToOneDescriptor).
@@ -492,7 +509,7 @@ class ReverseOneToOneDescriptor:
             else:
                 filter_args = self.related.field.get_forward_related_filter(instance)
                 try:
-                    rel_obj = self.get_queryset(instance=instance).get(**filter_args)
+                    rel_obj = await self.get_queryset(instance=instance).aget(**filter_args)
                 except self.related.related_model.DoesNotExist:
                     rel_obj = None
                 else:
@@ -509,6 +526,50 @@ class ReverseOneToOneDescriptor:
             )
         else:
             return rel_obj
+
+
+    class AsASyncDescriptor:
+        def __init__(self, parent):
+            self.parent = parent
+
+        def __get__(self, instance, cls=None):
+            """
+            Get the related instance through the forward relation.
+
+            With the example above, when getting ``child.parent``:
+
+            - ``self`` is the descriptor managing the ``parent`` attribute
+            - ``instance`` is the ``child`` instance
+            - ``cls`` is the ``Child`` class (we don't need it)
+            """
+            if instance is None:
+                return self
+
+            print('Reverse OneToOneDesriptor async get used')
+            return self.parent.aget_inner(instance)
+
+
+    @cached_property
+    def asasyncdescriptor(self):
+        return self.AsASyncDescriptor(self)
+
+
+    def __get__(self, instance, cls=None):
+        """
+        Get the related instance through the reverse relation.
+
+        With the example above, when getting ``place.restaurant``:
+
+        - ``self`` is the descriptor managing the ``restaurant`` attribute
+        - ``instance`` is the ``place`` instance
+        - ``cls`` is the ``Place`` class (unused)
+
+        Keep in mind that ``Restaurant`` holds the foreign key to ``Place``.
+        """
+        if instance is None:
+            return self
+
+        return async_to_sync(self.aget_inner)(instance)
 
     def __set__(self, instance, value):
         """
